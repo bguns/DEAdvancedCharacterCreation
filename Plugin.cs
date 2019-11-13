@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using UnityEngine;
 using UnityEngine.UI;
 using Voidforge;
 
@@ -16,9 +17,23 @@ namespace AdvancedCharacterCreation
 {
     [BepInPlugin("disco.castar.AdvancedCharacterCreation", "AdvancedCharacterCreation", "0.1")]
     public class Plugin : BaseUnityPlugin
-    {
+    { 
 
-        private static int startingSkillPoints;
+        private static int _startingAbilityPoints;
+
+        private static int _startingSkillPointsPerAbilityPoint;
+
+        private static AbilityLimitationSetting _abilityLimitSetting;
+
+        private static int _maxSkillValue;
+
+        private static int StartingSkillPoints
+        {
+            get
+            {
+                return _startingAbilityPoints * _startingSkillPointsPerAbilityPoint;
+            }
+        }
 
         public void Awake()
         {
@@ -49,15 +64,66 @@ namespace AdvancedCharacterCreation
 
         private void ParseConfig(ConfigFile configFile)
         {
-            var startingSkillPointsConfig = new ConfigDefinition("main", "StartingSkillPoints");
-            if (configFile.GetSetting<int>(startingSkillPointsConfig) == null)
+
+            // Settings
+            var startingSkillPointsPerAbilityPointConfig = new ConfigDefinition("main", "StartingSkillPointsPerAbilityPoint");
+            var startingAbilityPointsConfig = new ConfigDefinition("main", "StartingAbilityPoints");
+            var maxSkillValueAtCreation = new ConfigDefinition("main", "MaximumSkillValueAtCreation");
+            var skillPointsAbilityLimit = new ConfigDefinition("main", "SkillPointsAbilityLimited");
+
+            bool reload = false;
+
+            if (configFile.GetSetting<int>(startingAbilityPointsConfig) == null)
             {
-                configFile.AddSetting<int>(startingSkillPointsConfig, 40, new ConfigDescription("The amount of skill points you get at character creation"));
+                configFile.AddSetting<int>(startingAbilityPointsConfig, 8, new ConfigDescription("The amount of Ability points you get at character creation. Default is 8."));
                 configFile.Save();
+                reload = true;
+            }
+            if (configFile.GetSetting<int>(startingSkillPointsPerAbilityPointConfig) == null)
+            {
+                configFile.AddSetting<int>(startingSkillPointsPerAbilityPointConfig, 5, new ConfigDescription("The amount of Skill points you get at character creation, per starting Ability point.\nFor example: the default value of 5, combined with the default value of 8 for starting Ability points, results in a total of 40 Skill points to spend at character creation."));
+                configFile.Save();
+                reload = true;
+            }
+
+            if (configFile.GetSetting<int>(maxSkillValueAtCreation) == null)
+            {
+                configFile.AddSetting<int>(maxSkillValueAtCreation, 6, new ConfigDescription("The maximum value of a Skill at character creation, regardless of Ability scores or total Skill points."));
+                configFile.Save();
+                reload = true;
+            }
+
+            if (configFile.GetSetting<int>(skillPointsAbilityLimit) == null)
+            {
+                configFile.AddSetting(skillPointsAbilityLimit, 1, new ConfigDescription("The manner in which skill point assignment is limited by Ability scores.\n1: For a given Ability, you can put skill points in a maximum number of skills tied to that Ability equal to the Ability's score (e.g. if you have Motorics 2, you can increase a maximum of 2 different Motorics skills).\n2: For a given Ability, you can distribute a maximum of StartingSkillPointsPerAbilityPoint times the Ability's value into Skills tied to that ability (e.g. if StartingSkillPointsPerAbilityPoint = 5 (default), and you have Motorics 2, you can distribute a total of 10 skill points in Motorics skills)\n0: No limit on skill points distribution based on Ability scores (not recommended).", new AcceptableValueRange<int>(0, 2)));
+                configFile.Save();
+                reload = true;
+            }
+
+            if (reload)
+            {
                 configFile.Reload();
             }
 
-            startingSkillPoints = configFile.GetSetting<int>(startingSkillPointsConfig).Value;
+            _startingAbilityPoints = configFile.GetSetting<int>(startingAbilityPointsConfig).Value;
+            _startingSkillPointsPerAbilityPoint = configFile.GetSetting<int>(startingSkillPointsPerAbilityPointConfig).Value;
+            _maxSkillValue = configFile.GetSetting<int>(maxSkillValueAtCreation).Value;
+            try
+            {
+                _abilityLimitSetting = (AbilityLimitationSetting)configFile.GetSetting<int>(skillPointsAbilityLimit).Value;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("ParseConfig: error parsing ability limit setting. Defaulting to 1.");
+                _abilityLimitSetting = AbilityLimitationSetting.LIMIT_NR_OF_SKILLS;
+            }
+
+            Console.WriteLine("Advanced Character Creation Configuration:");
+            Console.WriteLine($". Ability points at character creation: {_startingAbilityPoints}");
+            Console.WriteLine($". Skill points per ability point at character creation: {_startingSkillPointsPerAbilityPoint}");
+            Console.WriteLine($". => Total nr. of Skill points to spend on character creation: {_startingAbilityPoints * _startingSkillPointsPerAbilityPoint}");
+            Console.WriteLine($". Maximum value of any Skill at character creation: {_maxSkillValue}");
+            Console.WriteLine($". Ability score limitation on Skill point spending: {Enum.GetName(typeof(AbilityLimitationSetting), _abilityLimitSetting)}");
         }
 
         private void CharacterEffect_Remove(On.Sunshine.Metric.CharacterEffect.orig_Remove orig, CharacterEffect self, CharacterSheet ch, ModifierType type, IModifierCause modifierCause)
@@ -139,17 +205,28 @@ namespace AdvancedCharacterCreation
 
                 if (LiteSingleton<PlayerCharacter>.Singleton.SkillPoints < 1)
                 {
-                    return "No skillpoints remaining.";
+                    return "No Skill points remaining.";
                 }
 
                 var modifier = skill.GetModifierOfType(ModifierType.CHARACTER_CREATION);
 
-                if (modifier.Amount >= 6)
+                if (modifier.Amount >= _maxSkillValue)
                 {
-                    return "Cannot increase skill to more than 6 on character creation";
+                    return $"Cannot increase Skill to more than {_maxSkillValue} on character creation";
                 }
 
-                return "For a given ability, you can only increase a number of skills associated with that ability equal to the ability's value.";
+                if (_abilityLimitSetting == AbilityLimitationSetting.LIMIT_NR_OF_SKILLS)
+                {
+                    return "For a given Ability, you can only increase a number of Skills associated with that Ability equal to the Ability's value.";
+                }
+
+                if (_abilityLimitSetting == AbilityLimitationSetting.LIMIT_NR_OF_SKILL_POINTS)
+                {
+                    int maxNrOfSkillPointsSpentPerAbility = (StartingSkillPoints - 1) / _startingAbilityPoints + 1;
+                    return $"For a given Ability, you can only spend a total number of Skill points on Skills associated with that Ability equal to the Ability's value times {maxNrOfSkillPointsSpentPerAbility}.";
+                }
+
+                return "Unknown reason";
             }
             else
             {
@@ -162,37 +239,69 @@ namespace AdvancedCharacterCreation
             if (SingletonComponent<CharsheetView>.Singleton.sheetMode == CharSheetMode.CREATION_SKILLS)
             {
                 var modifier = skill.GetModifierOfType(ModifierType.CHARACTER_CREATION);
-                if (modifier == null || modifier.Amount >= 6 || LiteSingleton<PlayerCharacter>.Singleton.SkillPoints < 1)
+                if (modifier == null || modifier.Amount >= _maxSkillValue || LiteSingleton<PlayerCharacter>.Singleton.SkillPoints < 1)
                 {
                     return false;
                 }
 
-                if (modifier.Amount > 1)
+                if (_abilityLimitSetting == AbilityLimitationSetting.LIMIT_NR_OF_SKILLS)
+                {
+                    return modifier.Amount > 1 || !NrOfSkillsLimitReached(skill);
+                }
+                else if (_abilityLimitSetting == AbilityLimitationSetting.LIMIT_NR_OF_SKILL_POINTS)
+                {
+                    return !NrOfSkillPointsLimitReached(skill);
+                }
+                else
                 {
                     return true;
                 }
-
-                CharacterSheet character = SingletonComponent<CharsheetView>.Singleton.character;
-                var abilityValue = character.GetAbilityValue(Skill.GetAbility(skill.skillType));
-                var nrOfIncreasedSkillsForAbility = 0;
-                for (int i = 0; i < character.skills.Length; i++)
-                {
-                    if (Skill.GetAbility(skill.skillType) == Skill.GetAbility(character.skills[i].skillType))
-                    {
-                        var modifier2 = character.skills[i].GetModifierOfType(ModifierType.CHARACTER_CREATION);
-                        if (modifier2 != null && modifier2.Amount > 1)
-                        {
-                            nrOfIncreasedSkillsForAbility++;
-                        }
-                    }
-                }
-                
-                return nrOfIncreasedSkillsForAbility < abilityValue;
             }
             else
             {
                 return orig(skill);
             }
+        }
+
+        private bool NrOfSkillsLimitReached(Skill skill)
+        {
+            CharacterSheet character = SingletonComponent<CharsheetView>.Singleton.character;
+            var abilityValue = character.GetAbilityValue(Skill.GetAbility(skill.skillType));
+            var nrOfIncreasedSkillsForAbility = 0;
+            for (int i = 0; i < character.skills.Length; i++)
+            {
+                if (Skill.GetAbility(skill.skillType) == Skill.GetAbility(character.skills[i].skillType))
+                {
+                    var modifier = character.skills[i].GetModifierOfType(ModifierType.CHARACTER_CREATION);
+                    if (modifier != null && modifier.Amount > 1)
+                    {
+                        nrOfIncreasedSkillsForAbility++;
+                    }
+                }
+            }
+
+            return nrOfIncreasedSkillsForAbility >= abilityValue;
+        }
+
+        private bool NrOfSkillPointsLimitReached(Skill skill)
+        {
+            CharacterSheet character = SingletonComponent<CharsheetView>.Singleton.character;
+            var abilityValue = character.GetAbilityValue(Skill.GetAbility(skill.skillType));
+            var nrOfSkillPointsSpentForAbility = 0;
+            int maxNrOfSkillPointsSpentForAbility = abilityValue * ((StartingSkillPoints - 1) / _startingAbilityPoints + 1);
+            for (int i = 0; i < character.skills.Length; i++)
+            {
+                if (Skill.GetAbility(skill.skillType) == Skill.GetAbility(character.skills[i].skillType))
+                {
+                    var modifier = character.skills[i].GetModifierOfType(ModifierType.CHARACTER_CREATION);
+                    if (modifier != null && modifier.Amount > 1)
+                    {
+                        nrOfSkillPointsSpentForAbility += (modifier.Amount-1);
+                    }
+                }
+            }
+
+            return nrOfSkillPointsSpentForAbility >= maxNrOfSkillPointsSpentForAbility;
         }
 
         private GenericTooltipData SetSignatureButton_GetTooltipData(On.SetSignatureButton.orig_GetTooltipData orig, SetSignatureButton self)
@@ -259,7 +368,7 @@ namespace AdvancedCharacterCreation
                     modifier.Amount = 1;
                 }
             }
-            LiteSingleton<PlayerCharacter>.Singleton.SkillPoints = startingSkillPoints;
+            LiteSingleton<PlayerCharacter>.Singleton.SkillPoints = StartingSkillPoints;
             orig(self);
         }
 
@@ -320,8 +429,42 @@ namespace AdvancedCharacterCreation
 
         private void CharsheetView_InitCharacter(On.CharsheetView.orig_InitCharacter orig, CharsheetView self, bool forceInit)
         {
-            orig(self, forceInit);
-            LiteSingleton<PlayerCharacter>.Singleton.SkillPoints = startingSkillPoints;
+            if (_startingAbilityPoints == 8)
+            {
+                orig(self, forceInit);
+            }
+            else
+            {
+                if (!self.IsNewCharInitialized || forceInit)
+                {
+                    self.character = CharacterSheetFactory.GetOrCreateComponent(SingletonComponent<World>.Singleton.you.gameObject);
+                    self.character.Clean();
+                    self.unusedAbilityPool = _startingAbilityPoints;
+                    self.usedAbilityPoints = 0;
+                    self.usedSkillPoints = 0;
+                    if (self.abilityMethod == AbilityMethod.ROLL)
+                    {
+                        int allowedTotal = self.unusedAbilityPool + 4;
+                        CharacterSheetFactory.RollAbilities(self.character, allowedTotal);
+                        self.usedAbilityPoints = self.unusedAbilityPool;
+                        self.unusedAbilityPool = 0;
+                    }
+                    else if (self.abilityMethod == AbilityMethod.POINTBUY)
+                    {
+                        CharacterSheetFactory.CleanAbilities(self.character);
+                    }
+                    else
+                    {
+                        Debug.LogError("We only roll for now");
+                    }
+                    SkillPortraitPanel.signatureSkill = SkillType.NONE;
+                    self.character.Recalc();
+                    self.NotifyActivation();
+                    self.GetType().GetProperty("IsNewCharInitialized").GetSetMethod(true).Invoke(self, new object[] { true });
+                }
+            }
+
+            LiteSingleton<PlayerCharacter>.Singleton.SkillPoints = StartingSkillPoints;
         }
 
         private void CharacterSheet_MakeSkills(On.Sunshine.Metric.CharacterSheet.orig_MakeSkills orig, CharacterSheet self)
@@ -350,8 +493,22 @@ namespace AdvancedCharacterCreation
             {
                 self.xpPanel.gameObject.SetActive(true);
                 self.skillPointField.gameObject.SetActive(true);
-                self.doneButton.gameObject.SetActive(LiteSingleton<PlayerCharacter>.Singleton.SkillPoints < 1);
+                self.doneButton.gameObject.SetActive(LiteSingleton<PlayerCharacter>.Singleton.SkillPoints < 1 || NoSkillUpgradable());
             }
+        }
+
+        private bool NoSkillUpgradable()
+        {
+            CharacterSheet character = SingletonComponent<CharsheetView>.Singleton.character;
+            for (int i = 0; i < character.skills.Length; i++)
+            {
+                if (LevelingUtils.IsSkillUpgradeable(character.skills[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private void CharacterSheetInfoPanel_ShowSkill(On.CharacterSheetInfoPanel.orig_ShowSkill orig, CharacterSheetInfoPanel self, Sunshine.Metric.Skill skill)
@@ -392,5 +549,12 @@ namespace AdvancedCharacterCreation
             }
             return modifier;
         }
+    }
+
+    public enum AbilityLimitationSetting
+    {
+        NONE = 0,
+        LIMIT_NR_OF_SKILLS = 1,
+        LIMIT_NR_OF_SKILL_POINTS = 2
     }
 }
