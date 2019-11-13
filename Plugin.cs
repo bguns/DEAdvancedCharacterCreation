@@ -15,7 +15,7 @@ using Voidforge;
 
 namespace AdvancedCharacterCreation
 {
-    [BepInPlugin("disco.castar.AdvancedCharacterCreation", "AdvancedCharacterCreation", "0.1")]
+    [BepInPlugin("disco.castar.AdvancedCharacterCreation", "AdvancedCharacterCreation", "0.2")]
     public class Plugin : BaseUnityPlugin
     { 
 
